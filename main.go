@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/ivaaaan/hyperliquid-dex-monitor/evm"
+	"github.com/joho/godotenv"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -36,6 +37,11 @@ var Dexes = map[string]DexMeta{
 }
 
 func main() {
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatal("error loading .env file")
+	}
+
 	bot, err := tgbotapi.NewBotAPI(os.Getenv("TELEGRAM_BOT_TOKEN"))
 	if err != nil {
 		log.Fatalf("create telegram bot: %v", err)
