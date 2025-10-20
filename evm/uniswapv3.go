@@ -11,7 +11,9 @@ import (
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/rpc"
 )
 
 type UniswapV3DEX struct {
@@ -79,8 +81,10 @@ func (u *UniswapV3DEX) StreamEvents(ctx context.Context) (<-chan Result, error) 
 			}
 		}
 
+		checked := make(map[uint64]common.Hash)
+
 		for {
-			header, err := u.client.HeaderByNumber(ctx, nil)
+			safeHeader, err := u.client.HeaderByNumber(ctx, big.NewInt(int64(rpc.SafeBlockNumber)))
 			if err != nil {
 				events <- Result{Err: fmt.Errorf("failed to refresh latest block: %w", err)}
 				// small pause, then retry unless ctx canceled
@@ -92,9 +96,8 @@ func (u *UniswapV3DEX) StreamEvents(ctx context.Context) (<-chan Result, error) 
 				}
 			}
 
-			latest := header.Number.Uint64()
-			if startBlock > latest {
-				// nothing new yet; wait and try again
+			safe := safeHeader.Number.Uint64()
+			if startBlock > safe {
 				select {
 				case <-ctx.Done():
 					return
@@ -103,10 +106,16 @@ func (u *UniswapV3DEX) StreamEvents(ctx context.Context) (<-chan Result, error) 
 				}
 			}
 
-			toBlock := min(startBlock+maxRange-1, latest)
+			toBlock := min(startBlock+maxRange-1, safe)
+			if toBlock < startBlock {
+				continue
+			}
+
+			poolCreatedSig := crypto.Keccak256Hash([]byte("PoolCreated(address,address,uint24,int24,address)"))
 
 			query := ethereum.FilterQuery{
 				Addresses: []common.Address{common.HexToAddress(u.address)},
+				Topics:    [][]common.Hash{{poolCreatedSig}},
 				FromBlock: big.NewInt(int64(startBlock)),
 				ToBlock:   big.NewInt(int64(toBlock)),
 			}
@@ -119,6 +128,15 @@ func (u *UniswapV3DEX) StreamEvents(ctx context.Context) (<-chan Result, error) 
 			}
 
 			for _, vLog := range logs {
+
+				if _, ok := checked[vLog.BlockNumber]; !ok {
+					hdr, err := u.client.HeaderByNumber(ctx, big.NewInt(int64(vLog.BlockNumber)))
+					if err != nil || hdr == nil || hdr.Hash() != vLog.BlockHash {
+						continue
+					}
+					checked[vLog.BlockNumber] = hdr.Hash()
+				}
+
 				var event PoolCreated
 
 				err := contractAbi.UnpackIntoInterface(&event, "PoolCreated", vLog.Data)
@@ -142,14 +160,21 @@ func (u *UniswapV3DEX) StreamEvents(ctx context.Context) (<-chan Result, error) 
 			}
 
 			startBlock = toBlock + 1
-			if toBlock == latest {
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(5 * time.Second):
+
+			if len(checked) > 5000 { // cap checked map size
+				for k := range checked {
+					delete(checked, k)
+					if len(checked) < 4000 {
+						break
+					}
 				}
 			}
 
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(5 * time.Second):
+			}
 		}
 	}()
 

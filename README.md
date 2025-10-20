@@ -2,6 +2,8 @@
 
 Simple Telegram bot to track new liquidity pools on HypeEVM-based DEXes. It works by monitoring factory contracts for new pair creation events and sends notifications to a specified Telegram chat.
 
+The bot has to poll the RPC instead of relying on WebSocket events due to limitations of HypeEVM RPC providers, therefore take into account rate limits on the RPC you are using.
+
 ## Running 
 
 Simply clone the repository and configure `.env` file with your settings. 
